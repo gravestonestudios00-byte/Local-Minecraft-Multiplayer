@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "localmultiplayer",
+  "version": "${version}",
+  "name": "Local Minecraft Multiplayer",
+  "description": "Simple fake local multiplayer prototype",
+  "authors": ["Gravestone Studios"],
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.gravestonestudios.localmultiplayer.LocalMultiplayerClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.11",
+    "minecraft": "1.20.1",
+    "fabric-api": "*"
+  }
+}
