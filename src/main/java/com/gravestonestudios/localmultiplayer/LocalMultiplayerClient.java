@@ -1,5 +1,6 @@
 package com.gravestonestudios.localmultiplayer;
 
+import com.mojang.authlib.GameProfile;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
@@ -10,11 +11,16 @@ import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWGamepadState;
 
+import java.util.UUID;
+
 public class LocalMultiplayerClient implements ClientModInitializer {
+
+    private static final int FAKE_PLAYER_ENTITY_ID = -42069;
 
     private static OtherClientPlayerEntity fakePlayer;
     private static int activeGamepad = -1;
     private static boolean announcedGamepad = false;
+    private static boolean announcedSpawn = false;
 
     @Override
     public void onInitializeClient() {
@@ -23,10 +29,11 @@ public class LocalMultiplayerClient implements ClientModInitializer {
                 fakePlayer = null;
                 activeGamepad = -1;
                 announcedGamepad = false;
+                announcedSpawn = false;
                 return;
             }
 
-            if (fakePlayer == null) {
+            if (fakePlayer == null || fakePlayer.isRemoved()) {
                 spawnFakePlayer(client);
             }
 
@@ -37,16 +44,27 @@ public class LocalMultiplayerClient implements ClientModInitializer {
     private void spawnFakePlayer(MinecraftClient client) {
         ClientWorld world = client.world;
 
-        fakePlayer = new OtherClientPlayerEntity(
-                world,
-                client.player.getGameProfile()
+        GameProfile playerTwoProfile = new GameProfile(
+                UUID.nameUUIDFromBytes("LocalMultiplayerPlayerTwo".getBytes()),
+                "Player2"
         );
 
-        Vec3d pos = client.player.getPos().add(2, 0, 0);
+        fakePlayer = new OtherClientPlayerEntity(world, playerTwoProfile);
+        fakePlayer.setId(FAKE_PLAYER_ENTITY_ID);
 
-        fakePlayer.refreshPositionAndAngles(pos.x, pos.y, pos.z, 0, 0);
+        Vec3d forward = client.player.getRotationVec(1.0f).multiply(3.0);
+        Vec3d pos = client.player.getPos().add(forward.x, 0.0, forward.z);
 
-        world.addEntity(fakePlayer.getId(), fakePlayer);
+        fakePlayer.refreshPositionAndAngles(pos.x, client.player.getY(), pos.z, client.player.getYaw(), 0.0f);
+        fakePlayer.setHealth(20.0f);
+        fakePlayer.setOnGround(true);
+
+        world.addEntity(FAKE_PLAYER_ENTITY_ID, fakePlayer);
+
+        if (!announcedSpawn && client.player != null) {
+            client.player.sendMessage(Text.literal("Local Multiplayer: Player2 spawned in front of you."), false);
+            announcedSpawn = true;
+        }
     }
 
     private void updateControllerMovement(MinecraftClient client) {
@@ -74,9 +92,13 @@ public class LocalMultiplayerClient implements ClientModInitializer {
 
         double speed = 0.15;
 
-        Vec3d movement = new Vec3d(leftX * speed, 0, leftY * speed);
+        Vec3d movement = new Vec3d(leftX * speed, 0.0, leftY * speed);
 
         fakePlayer.setPosition(fakePlayer.getPos().add(movement));
+        fakePlayer.setYaw((float) Math.toDegrees(Math.atan2(-movement.x, movement.z)));
+        fakePlayer.prevYaw = fakePlayer.getYaw();
+        fakePlayer.bodyYaw = fakePlayer.getYaw();
+        fakePlayer.headYaw = fakePlayer.getYaw();
 
         if (state.buttons(GLFW.GLFW_GAMEPAD_BUTTON_A) == GLFW.GLFW_PRESS) {
             fakePlayer.setVelocity(fakePlayer.getVelocity().x, 0.42f, fakePlayer.getVelocity().z);
