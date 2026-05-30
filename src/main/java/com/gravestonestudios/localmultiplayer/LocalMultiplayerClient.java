@@ -4,12 +4,10 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.OtherClientPlayerEntity;
-import net.minecraft.client.option.GameOptions;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
-
-import java.util.UUID;
+import org.lwjgl.glfw.GLFWGamepadState;
 
 public class LocalMultiplayerClient implements ClientModInitializer {
 
@@ -50,7 +48,7 @@ public class LocalMultiplayerClient implements ClientModInitializer {
             return;
         }
 
-        var state = GLFW.GLFWGamepadState.create();
+        GLFWGamepadState state = GLFWGamepadState.create();
 
         if (!GLFW.glfwGetGamepadState(GLFW.GLFW_JOYSTICK_1, state)) {
             return;
