@@ -33,12 +33,6 @@ import java.util.UUID;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
-    /**
-     * Player2 render build:
-     * Render Player2 into a main-context offscreen framebuffer, read it to CPU memory, then upload
-     * the pixels into a texture owned by the second GLFW window. This avoids directly sharing the
-     * Minecraft framebuffer texture across contexts, which was the crash path.
-     */
     private static final boolean ENABLE_PLAYER2_RENDER = true;
 
     private static Framebuffer p2Framebuffer;
@@ -161,10 +155,13 @@ public abstract class GameRendererMixin {
             RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
             renderWorld(tickDelta, startTime, new MatrixStack());
 
+            // renderWorld can leave another framebuffer bound. Read explicitly from Player2's FBO.
             p2Pixels.clear();
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) p2Framebuffer).getFbo());
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
             GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
             GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2Pixels);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
             p2Pixels.flip();
         } finally {
             renderHand = oldRenderHand;
