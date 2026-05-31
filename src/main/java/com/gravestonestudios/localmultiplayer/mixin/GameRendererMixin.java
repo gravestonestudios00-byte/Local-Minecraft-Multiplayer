@@ -60,7 +60,7 @@ public abstract class GameRendererMixin {
     @Shadow
     public abstract void renderWorld(float tickDelta, long limitTime, MatrixStack matrices);
 
-    @Inject(method = "render", at = @At("TAIL"))
+    @Inject(method = "render", at = @At("HEAD"))
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) {
             return;
@@ -113,6 +113,16 @@ public abstract class GameRendererMixin {
             drawCpuBufferToSecondWindow(p2Window, targetWidth, targetHeight);
         } catch (Throwable ignored) {
             clearSecondWindowRed(p2Window);
+        } finally {
+            // Very important: vanilla Player1 rendering runs after this HEAD injection.
+            // Restore main context/framebuffer so the real render fully overwrites any leaked P2 pixels.
+            GLFW.glfwMakeContextCurrent(client.getWindow().getHandle());
+            GLCapabilities mainCaps = LocalMultiplayerClient.getMainCapabilities();
+            if (mainCaps != null) {
+                GL.setCapabilities(mainCaps);
+            }
+            client.getFramebuffer().beginWrite(true);
+            RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
         }
     }
 
@@ -155,7 +165,6 @@ public abstract class GameRendererMixin {
             RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
             renderWorld(tickDelta, startTime, new MatrixStack());
 
-            // renderWorld can leave another framebuffer bound. Read explicitly from Player2's FBO.
             p2Pixels.clear();
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) p2Framebuffer).getFbo());
             GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
