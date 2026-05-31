@@ -76,6 +76,12 @@ public abstract class GameRendererMixin {
             return;
         }
 
+        // Do not capture menus, pause screen, inventory, chat, etc. Full render includes GUI layers,
+        // so capturing while a screen is open turns the Player2 window into the same dark menu overlay.
+        if (client.currentScreen != null) {
+            return;
+        }
+
         long p2Window = LocalMultiplayerClient.getSecondWindowHandle();
         if (p2Window == 0) {
             LocalMultiplayerClient.initSecondWindow(client);
@@ -214,7 +220,7 @@ public abstract class GameRendererMixin {
             RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
 
             // Use the full GameRenderer path instead of renderWorld only.
-            // This should include passes that renderWorld-only capture missed.
+            // This includes world passes that renderWorld-only capture missed, but menus are skipped above.
             render(tickDelta, startTime, false);
 
             p2Pixels.clear();
