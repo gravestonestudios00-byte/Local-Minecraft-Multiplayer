@@ -46,6 +46,7 @@ import net.minecraft.util.Uuids;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.glfw.GLFWGamepadState;
 import org.slf4j.Logger;
@@ -91,6 +92,12 @@ public class LocalMultiplayerClient implements ClientModInitializer {
     private static long secondWindowHandle = 0;
     private static boolean secondWindowCapabilitiesInitialized = false;
     private static Framebuffer secondPlayerFramebuffer;
+    private static GLCapabilities mainCapabilities;
+    private static GLCapabilities secondCapabilities;
+
+    public static GLCapabilities getSecondCapabilities() {
+        return secondCapabilities;
+    }
 
     public static Framebuffer getSecondPlayerFramebuffer() {
         return secondPlayerFramebuffer;
@@ -166,15 +173,18 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE);
         // Share context with main window to reuse textures/models
         secondWindowHandle = GLFW.glfwCreateWindow(800, 600, "Player 2 - Local Multiplayer", 0, mainWindow);
-        
+
         if (secondWindowHandle != 0) {
+            mainCapabilities = GL.getCapabilities();
+
             // Temporarily switch context to initialize GL capabilities for this window
             GLFW.glfwMakeContextCurrent(secondWindowHandle);
-            GL.createCapabilities();
+            secondCapabilities = GL.createCapabilities();
             secondWindowCapabilitiesInitialized = true;
-            
-            // Switch back to main window
+
+            // Switch back to main window and restore capabilities
             GLFW.glfwMakeContextCurrent(mainWindow);
+            GL.setCapabilities(mainCapabilities);
             GLFW.glfwShowWindow(secondWindowHandle);
             LOGGER.info("[LocalMultiplayer] Player 2 window initialized.");
 
