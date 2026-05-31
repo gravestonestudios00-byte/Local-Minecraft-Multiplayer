@@ -4,22 +4,19 @@ import com.gravestonestudios.localmultiplayer.LocalMultiplayerClient;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.ShaderProgram;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.client.render.BufferBuilder;
 import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.render.Tessellator;
+import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.util.Window;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
-import org.spongepowered.asm.mixin.Final;
-import net.minecraft.client.render.Tessellator;
-import net.minecraft.client.render.BufferBuilder;
-import net.minecraft.client.render.VertexFormat;
-import net.minecraft.client.render.VertexFormats;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GLCapabilities;
-import org.lwjgl.opengl.GL;
-import org.joml.Matrix4f;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -65,34 +62,9 @@ public abstract class GameRendererMixin {
         Framebuffer p2Framebuffer = LocalMultiplayerClient.getSecondPlayerFramebuffer();
         long mainWindow = client.getWindow().getHandle();
 
-        // 1. DEBUG/WAITING SCREEN: If P2 isn't ready, show blue in Window 2
+        // Stability rule: do not touch the second OpenGL context until Player2 and the framebuffer exist.
+        // The previous version switched contexts even for the waiting screen, which can hard-close Minecraft on join.
         if (playerTwo == null || p2Framebuffer == null || client.world == null) {
-            try {
-                long previousContext = GLFW.glfwGetCurrentContext();
-                GLCapabilities previousCaps = GL.getCapabilities();
-
-                GLFW.glfwMakeContextCurrent(p2Window);
-                if (LocalMultiplayerClient.areCapabilitiesInitialized()) {
-                    GL.setCapabilities(LocalMultiplayerClient.getSecondCapabilities());
-
-                    int[] w = new int[1], h = new int[1];
-                    GLFW.glfwGetFramebufferSize(p2Window, w, h);
-                    GL11.glViewport(0, 0, w[0], h[0]);
-                    GL11.glClearColor(0.1f, 0.4f, 0.6f, 1.0f);
-                    GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-                    GLFW.glfwSwapBuffers(p2Window);
-                }
-
-                GLFW.glfwMakeContextCurrent(previousContext);
-                GL.setCapabilities(previousCaps);
-            } catch (Throwable t) {
-                // Ignore errors
-            } finally {
-                GLFW.glfwMakeContextCurrent(mainWindow);
-                GL.setCapabilities(LocalMultiplayerClient.getMainCapabilities());
-                client.getFramebuffer().beginWrite(true);
-                RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
-            }
             return;
         }
 
@@ -100,35 +72,30 @@ public abstract class GameRendererMixin {
             return;
         }
 
-        Entity originalCamera = client.getCameraEntity();
-        boolean originalRenderHand = renderHand;
-        boolean originalBlockOutline = blockOutlineEnabled;
-
-        // 2. PREPARE DIMENSIONS: Sync framebuffer with P2 window size
-        int[] p2winW = new int[1], p2winH = new int[1];
-        GLFW.glfwGetFramebufferSize(p2Window, p2winW, p2winH);
-        int targetWidth = Math.max(1, p2winW[0]);
-        int targetHeight = Math.max(1, p2winH[0]);
-
         LocalMultiplayerClient.isRenderingSecondView = true;
         Window window = client.getWindow();
 
         try {
+            int[] p2winW = new int[1];
+            int[] p2winH = new int[1];
+            GLFW.glfwGetFramebufferSize(p2Window, p2winW, p2winH);
+            int targetWidth = Math.max(1, p2winW[0]);
+            int targetHeight = Math.max(1, p2winH[0]);
+
             if (p2Framebuffer.textureWidth != targetWidth || p2Framebuffer.textureHeight != targetHeight) {
-                try { LOGGER.info("[LocalMultiplayer] Resizing P2 framebuffer from {}x{} to {}x{}", p2Framebuffer.textureWidth, p2Framebuffer.textureHeight, targetWidth, targetHeight); } catch (Throwable t) {}
                 p2Framebuffer.resize(targetWidth, targetHeight, MinecraftClient.IS_SYSTEM_MAC);
             }
 
-            // 3. RENDER P2 WORLD (In Main Context, isolated to offscreen buffer)
             p2Framebuffer.beginWrite(true);
-            
+
             Entity oldCamera = client.getCameraEntity();
-            client.setCameraEntity(playerTwo);
             boolean oldHand = renderHand;
             boolean oldOutline = blockOutlineEnabled;
+
+            client.setCameraEntity(playerTwo);
             renderHand = true;
             blockOutlineEnabled = true;
-            
+
             try {
                 RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
                 renderWorld(tickDelta, startTime, new MatrixStack());
@@ -139,24 +106,23 @@ public abstract class GameRendererMixin {
                 p2Framebuffer.endWrite();
             }
 
-            // 3. ISOLATION FIX: Reset the flag immediately after P2's world render finishes.
-            // This ensures subsequent calls to client.getFramebuffer() for P1's HUD
-            // return the correct main framebuffer.
             LocalMultiplayerClient.isRenderingSecondView = false;
-
-            // Explicitly re-bind the main framebuffer to the main context
             client.getFramebuffer().beginWrite(true);
             RenderSystem.viewport(0, 0, window.getFramebufferWidth(), window.getFramebufferHeight());
 
-            // 4. DISPLAY IN WINDOW 2: Switch context to draw the result texture.
             long previousContext = GLFW.glfwGetCurrentContext();
             GLCapabilities previousCaps = GL.getCapabilities();
 
             try {
                 GLFW.glfwMakeContextCurrent(p2Window);
-                GL.setCapabilities(LocalMultiplayerClient.getSecondCapabilities());
+                GLCapabilities secondCaps = LocalMultiplayerClient.getSecondCapabilities();
+                if (secondCaps == null) {
+                    return;
+                }
+                GL.setCapabilities(secondCaps);
 
-                int[] p2w = new int[1], p2h = new int[1];
+                int[] p2w = new int[1];
+                int[] p2h = new int[1];
                 GLFW.glfwGetFramebufferSize(p2Window, p2w, p2h);
 
                 GL11.glViewport(0, 0, p2w[0], p2h[0]);
@@ -164,14 +130,10 @@ public abstract class GameRendererMixin {
                 GL11.glClearColor(0f, 0f, 0f, 1f);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
 
-                // Set up the shader and texture using modern RenderSystem
-                RenderSystem.setShader(net.minecraft.client.render.GameRenderer::getPositionTexProgram);
+                RenderSystem.setShader(GameRenderer::getPositionTexProgram);
                 RenderSystem.setShaderTexture(0, p2Framebuffer.getColorAttachment());
                 RenderSystem.disableDepthTest();
 
-                // Use Projection mode for the coordinate system
-                // Note: These are legacy calls that LWJGL allows but Core Profile ignores.
-                // Minecraft handles these matrices via RenderSystem normally.
                 GL11.glMatrixMode(GL11.GL_PROJECTION);
                 GL11.glPushMatrix();
                 GL11.glLoadIdentity();
@@ -181,7 +143,6 @@ public abstract class GameRendererMixin {
                 GL11.glPushMatrix();
                 GL11.glLoadIdentity();
 
-                // Modern BufferBuilder draw
                 Tessellator tessellator = Tessellator.getInstance();
                 BufferBuilder bufferBuilder = tessellator.getBuffer();
                 bufferBuilder.begin(net.minecraft.client.render.VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE);
@@ -204,9 +165,11 @@ public abstract class GameRendererMixin {
         } catch (Throwable exception) {
             LOGGER.error("P2 Render Crash", exception);
         } finally {
-            // Safety net restoration
             GLFW.glfwMakeContextCurrent(mainWindow);
-            GL.setCapabilities(LocalMultiplayerClient.getMainCapabilities());
+            GLCapabilities mainCaps = LocalMultiplayerClient.getMainCapabilities();
+            if (mainCaps != null) {
+                GL.setCapabilities(mainCaps);
+            }
             client.getFramebuffer().beginWrite(true);
             RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
             LocalMultiplayerClient.isRenderingSecondView = false;
@@ -222,7 +185,7 @@ public abstract class GameRendererMixin {
     )
     private void localmultiplayer$skipEntityOutlines(net.minecraft.client.render.WorldRenderer instance) {
         if (LocalMultiplayerClient.isRenderingSecondView) {
-            return; // Skip outline pass in split-screen to avoid visual drift/weirdness
+            return;
         }
         instance.drawEntityOutlinesFramebuffer();
     }
@@ -235,7 +198,6 @@ public abstract class GameRendererMixin {
             )
     )
     private int localmultiplayer$adjustHeightForProjection(Window instance) {
-        // If we are currently rendering P2's view, use P2's window height for calculations
         if (LocalMultiplayerClient.isRenderingSecondView) {
             Framebuffer fb = LocalMultiplayerClient.getSecondPlayerFramebuffer();
             if (fb != null) return Math.max(1, fb.textureHeight);
@@ -251,7 +213,6 @@ public abstract class GameRendererMixin {
             )
     )
     private int localmultiplayer$adjustWidthForProjection(Window instance) {
-        // If we are currently rendering P2's view, use P2's window width for calculations
         if (LocalMultiplayerClient.isRenderingSecondView) {
             Framebuffer fb = LocalMultiplayerClient.getSecondPlayerFramebuffer();
             if (fb != null) return Math.max(1, fb.textureWidth);
