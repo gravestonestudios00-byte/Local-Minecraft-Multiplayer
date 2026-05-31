@@ -60,7 +60,14 @@ public abstract class GameRendererMixin {
     @Shadow
     public abstract void renderWorld(float tickDelta, long limitTime, MatrixStack matrices);
 
-    @Inject(method = "render", at = @At("HEAD"))
+    @Inject(
+            method = "render",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/render/GameRenderer;renderWorld(FJLnet/minecraft/client/util/math/MatrixStack;)V",
+                    shift = At.Shift.BEFORE
+            )
+    )
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) {
             return;
@@ -114,8 +121,8 @@ public abstract class GameRendererMixin {
         } catch (Throwable ignored) {
             clearSecondWindowRed(p2Window);
         } finally {
-            // Very important: vanilla Player1 rendering runs after this HEAD injection.
-            // Restore main context/framebuffer so the real render fully overwrites any leaked P2 pixels.
+            // Vanilla Player1 renderWorld runs immediately after this injection.
+            // Restore main context/framebuffer so Player1 can overwrite any leaked P2 pixels.
             GLFW.glfwMakeContextCurrent(client.getWindow().getHandle());
             GLCapabilities mainCaps = LocalMultiplayerClient.getMainCapabilities();
             if (mainCaps != null) {
