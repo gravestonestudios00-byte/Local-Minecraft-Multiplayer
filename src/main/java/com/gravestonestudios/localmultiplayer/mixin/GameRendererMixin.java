@@ -19,6 +19,7 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GLCapabilities;
 import org.lwjgl.opengl.GL;
+import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -48,22 +49,21 @@ public abstract class GameRendererMixin {
     @Shadow
     public abstract void renderWorld(float tickDelta, long limitTime, MatrixStack matrices);
 
-    @Inject(
-            method = "render",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lnet/minecraft/client/render/GameRenderer;renderWorld(FJLnet/minecraft/client/util/math/MatrixStack;)V",
-                    ordinal = 0,
-                    shift = At.Shift.AFTER
-            )
-    )
+    @Inject(method = "render", at = @At("TAIL"))
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
-        Entity playerTwo = localmultiplayer$getPlayerTwoEntity();
+        if (client.world == null || client.player == null) return;
+
         long p2Window = LocalMultiplayerClient.getSecondWindowHandle();
-        Framebuffer p2Framebuffer = LocalMultiplayerClient.getSecondPlayerFramebuffer();
-        long mainWindow = client.getWindow().getHandle();
+        if (p2Window == 0) {
+            LocalMultiplayerClient.initSecondWindow(client);
+            p2Window = LocalMultiplayerClient.getSecondWindowHandle();
+        }
 
         if (p2Window == 0) return;
+
+        Entity playerTwo = localmultiplayer$getPlayerTwoEntity();
+        Framebuffer p2Framebuffer = LocalMultiplayerClient.getSecondPlayerFramebuffer();
+        long mainWindow = client.getWindow().getHandle();
 
         // 1. DEBUG/WAITING SCREEN: If P2 isn't ready, show blue in Window 2
         if (playerTwo == null || p2Framebuffer == null || client.world == null) {
@@ -88,11 +88,10 @@ public abstract class GameRendererMixin {
             } catch (Throwable t) {
                 // Ignore errors
             } finally {
-                // Fallback restoration
-                long current = GLFW.glfwGetCurrentContext();
-                if (current != mainWindow) {
-                    GLFW.glfwMakeContextCurrent(mainWindow);
-                }
+                GLFW.glfwMakeContextCurrent(mainWindow);
+                GL.setCapabilities(LocalMultiplayerClient.getMainCapabilities());
+                client.getFramebuffer().beginWrite(true);
+                RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
             }
             return;
         }
@@ -165,9 +164,14 @@ public abstract class GameRendererMixin {
                 GL11.glClearColor(0f, 0f, 0f, 1f);
                 GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
 
-                GL11.glEnable(GL11.GL_TEXTURE_2D);
-                GL11.glBindTexture(GL11.GL_TEXTURE_2D, p2Framebuffer.getColorAttachment());
+                // Set up the shader and texture using modern RenderSystem
+                RenderSystem.setShader(net.minecraft.client.render.GameRenderer::getPositionTexProgram);
+                RenderSystem.setShaderTexture(0, p2Framebuffer.getColorAttachment());
+                RenderSystem.disableDepthTest();
 
+                // Use Projection mode for the coordinate system
+                // Note: These are legacy calls that LWJGL allows but Core Profile ignores.
+                // Minecraft handles these matrices via RenderSystem normally.
                 GL11.glMatrixMode(GL11.GL_PROJECTION);
                 GL11.glPushMatrix();
                 GL11.glLoadIdentity();
@@ -177,12 +181,15 @@ public abstract class GameRendererMixin {
                 GL11.glPushMatrix();
                 GL11.glLoadIdentity();
 
-                GL11.glBegin(GL11.GL_QUADS);
-                GL11.glTexCoord2f(0f, 0f); GL11.glVertex2f(0f, 1f);
-                GL11.glTexCoord2f(1f, 0f); GL11.glVertex2f(1f, 1f);
-                GL11.glTexCoord2f(1f, 1f); GL11.glVertex2f(1f, 0f);
-                GL11.glTexCoord2f(0f, 1f); GL11.glVertex2f(0f, 0f);
-                GL11.glEnd();
+                // Modern BufferBuilder draw
+                Tessellator tessellator = Tessellator.getInstance();
+                BufferBuilder bufferBuilder = tessellator.getBuffer();
+                bufferBuilder.begin(net.minecraft.client.render.VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE);
+                bufferBuilder.vertex(0.0, 1.0, 0.0).texture(0.0f, 0.0f).next();
+                bufferBuilder.vertex(1.0, 1.0, 0.0).texture(1.0f, 0.0f).next();
+                bufferBuilder.vertex(1.0, 0.0, 0.0).texture(1.0f, 1.0f).next();
+                bufferBuilder.vertex(0.0, 0.0, 0.0).texture(0.0f, 1.0f).next();
+                tessellator.draw();
 
                 GL11.glPopMatrix();
                 GL11.glMatrixMode(GL11.GL_PROJECTION);
@@ -199,6 +206,9 @@ public abstract class GameRendererMixin {
         } finally {
             // Safety net restoration
             GLFW.glfwMakeContextCurrent(mainWindow);
+            GL.setCapabilities(LocalMultiplayerClient.getMainCapabilities());
+            client.getFramebuffer().beginWrite(true);
+            RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
             LocalMultiplayerClient.isRenderingSecondView = false;
         }
     }

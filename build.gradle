@@ -8,7 +8,7 @@ group = 'com.gravestonestudios'
 
 repositories {
     mavenCentral()
-    maven { url 'https://maven.fabricmc.net/' }
+    maven { url = "https://maven.fabricmc.net/" }
 }
 
 loom {

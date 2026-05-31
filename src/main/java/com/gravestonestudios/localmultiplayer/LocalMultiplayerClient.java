@@ -99,6 +99,10 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         return secondCapabilities;
     }
 
+    public static GLCapabilities getMainCapabilities() {
+        return mainCapabilities;
+    }
+
     public static Framebuffer getSecondPlayerFramebuffer() {
         return secondPlayerFramebuffer;
     }
@@ -118,10 +122,6 @@ public class LocalMultiplayerClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (secondWindowHandle == 0 && client.getWindow() != null) {
-                initSecondWindow(client);
-            }
-
             if (client.player == null || client.world == null || client.getServer() == null) {
                 cleanupSecondClient(true);
                 return;
@@ -168,7 +168,7 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         });
     }
 
-    private void initSecondWindow(MinecraftClient client) {
+    public static void initSecondWindow(MinecraftClient client) {
         long mainWindow = client.getWindow().getHandle();
         GLFW.glfwWindowHint(GLFW.GLFW_VISIBLE, GLFW.GLFW_FALSE);
         // Share context with main window to reuse textures/models
