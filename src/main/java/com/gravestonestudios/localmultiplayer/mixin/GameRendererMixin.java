@@ -12,6 +12,7 @@ import net.minecraft.entity.Entity;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GLCapabilities;
 import org.spongepowered.asm.mixin.Final;
@@ -155,7 +156,7 @@ public abstract class GameRendererMixin {
         }
 
         GL20.glUseProgram(p2BlitProgram);
-        GL11.glActiveTexture(GL11.GL_TEXTURE0);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
         int samplerLocation = GL20.glGetUniformLocation(p2BlitProgram, "uTexture");
         GL20.glUniform1i(samplerLocation, 0);
