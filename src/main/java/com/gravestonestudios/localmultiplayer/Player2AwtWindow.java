@@ -7,6 +7,7 @@ import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 public final class Player2AwtWindow {
     private static JFrame frame;
@@ -19,15 +20,30 @@ public final class Player2AwtWindow {
     private Player2AwtWindow() {
     }
 
+    public static void showWaiting(int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        ensureImage(width, height);
+        Arrays.fill(argbPixels, 0xFF102050);
+        image.setRGB(0, 0, width, height, argbPixels, 0, width);
+
+        SwingUtilities.invokeLater(() -> {
+            ensureFrame(width, height);
+            panel.repaint();
+        });
+    }
+
     public static void update(ByteBuffer rgbaPixels, int width, int height) {
         if (rgbaPixels == null || width <= 0 || height <= 0) {
+            showWaiting(Math.max(1, width), Math.max(1, height));
             return;
         }
 
         ensureImage(width, height);
         rgbaPixels.rewind();
 
-        int index = 0;
         for (int y = height - 1; y >= 0; y--) {
             int rowOffset = y * width;
             for (int x = 0; x < width; x++) {
@@ -36,7 +52,6 @@ public final class Player2AwtWindow {
                 int b = rgbaPixels.get() & 0xFF;
                 int a = rgbaPixels.get() & 0xFF;
                 argbPixels[rowOffset + x] = (a << 24) | (r << 16) | (g << 8) | b;
-                index++;
             }
         }
 
