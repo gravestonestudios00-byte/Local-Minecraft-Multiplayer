@@ -49,8 +49,13 @@ public abstract class GameRendererMixin {
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) return;
 
+        Window window = client.getWindow();
+        int targetWidth = Math.min(854, Math.max(1, window.getFramebufferWidth()));
+        int targetHeight = Math.min(480, Math.max(1, window.getFramebufferHeight()));
+
         Entity playerTwo = localmultiplayer$getPlayerTwoEntity();
         if (playerTwo == null) {
+            Player2AwtWindow.showWaiting(targetWidth, targetHeight);
             return;
         }
 
@@ -58,15 +63,12 @@ public abstract class GameRendererMixin {
             return;
         }
 
-        Window window = client.getWindow();
         LocalMultiplayerClient.isRenderingSecondView = true;
 
         try {
-            int targetWidth = Math.min(854, Math.max(1, window.getFramebufferWidth()));
-            int targetHeight = Math.min(480, Math.max(1, window.getFramebufferHeight()));
-
             ensurePlayer2Framebuffer(targetWidth, targetHeight);
             if (p2Framebuffer == null) {
+                Player2AwtWindow.showWaiting(targetWidth, targetHeight);
                 return;
             }
 
@@ -93,7 +95,7 @@ public abstract class GameRendererMixin {
 
             Player2AwtWindow.update(p2PixelBuffer, targetWidth, targetHeight);
         } catch (Throwable ignored) {
-            // Keep Minecraft alive even if the external viewer has a frame problem.
+            Player2AwtWindow.showWaiting(targetWidth, targetHeight);
         } finally {
             LocalMultiplayerClient.isRenderingSecondView = false;
             client.getFramebuffer().beginWrite(true);
