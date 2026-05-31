@@ -390,6 +390,20 @@ public abstract class GameRendererMixin {
     }
 
     @Redirect(
+            method = "renderWorld",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/MinecraftClient;getFramebuffer()Lnet/minecraft/client/gl/Framebuffer;"
+            )
+    )
+    private Framebuffer localmultiplayer$redirectGameRendererFramebuffer(MinecraftClient instance) {
+        if (LocalMultiplayerClient.isRenderingSecondView && p2Framebuffer != null) {
+            return p2Framebuffer;
+        }
+        return instance.getFramebuffer();
+    }
+
+    @Redirect(
             method = "render",
             at = @At(
                     value = "INVOKE",
