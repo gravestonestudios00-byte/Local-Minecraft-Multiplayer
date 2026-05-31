@@ -11,6 +11,10 @@ repositories {
     maven { url 'https://maven.fabricmc.net/' }
 }
 
+loom {
+    accessWidenerPath = file('src/main/resources/localmultiplayer.accesswidener')
+}
+
 dependencies {
     minecraft 'com.mojang:minecraft:1.20.1'
     mappings 'net.fabricmc:yarn:1.20.1+build.10:v2'

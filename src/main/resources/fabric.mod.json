@@ -6,6 +6,10 @@
   "description": "Simple fake local multiplayer prototype",
   "authors": ["Gravestone Studios"],
   "environment": "client",
+  "accessWidener": "localmultiplayer.accesswidener",
+  "mixins": [
+    "localmultiplayer.mixins.json"
+  ],
   "entrypoints": {
     "client": [
       "com.gravestonestudios.localmultiplayer.LocalMultiplayerClient"

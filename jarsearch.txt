@@ -1,0 +1,12 @@
+net/minecraft/network/ClientConnection$2.class
+net/minecraft/network/ClientConnection$1.class
+net/minecraft/network/ClientConnection$QueuedPacket.class
+net/minecraft/network/ClientConnection.class
+net/minecraft/server/ServerNetworkIo$DelayingChannelInboundHandler$Packet.class
+net/minecraft/util/profiling/jfr/sample/NetworkIoStatistics$Packet.class
+net/minecraft/util/profiling/jfr/sample/NetworkIoStatistics$PacketStatistics.class
+net/minecraft/server/ServerNetworkIo$2.class
+net/minecraft/server/ServerNetworkIo$1.class
+net/minecraft/server/ServerNetworkIo$DelayingChannelInboundHandler.class
+net/minecraft/server/ServerNetworkIo.class
+net/minecraft/util/profiling/jfr/sample/NetworkIoStatistics.class
