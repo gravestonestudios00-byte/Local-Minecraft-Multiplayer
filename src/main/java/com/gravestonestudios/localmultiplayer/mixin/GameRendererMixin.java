@@ -9,31 +9,35 @@ import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.util.Window;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL13;
-import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 import org.lwjgl.opengl.GLCapabilities;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.nio.ByteBuffer;
 import java.util.UUID;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
     /**
-     * Stage 4:
-     * Render Player2's camera into the offscreen framebuffer, then draw that framebuffer's shared
-     * color texture into the second GLFW window using raw OpenGL only.
+     * Stage 5:
+     * Avoid direct cross-context texture use. Render Player2 to the main-context framebuffer,
+     * read pixels back to CPU memory, then draw those pixels into the second window context.
+     * This is slower, but much safer for diagnosing/avoiding shared-texture native crashes.
      */
-    private static final boolean ENABLE_PLAYER2_TEXTURE_COPY = true;
-    private static int p2BlitProgram = 0;
+    private static final boolean ENABLE_PLAYER2_CPU_BLIT = true;
+    private static ByteBuffer p2PixelBuffer;
+    private static int p2PixelWidth = 0;
+    private static int p2PixelHeight = 0;
 
     @Shadow
     @Final
@@ -63,8 +67,8 @@ public abstract class GameRendererMixin {
         Entity playerTwo = localmultiplayer$getPlayerTwoEntity();
         Framebuffer p2Framebuffer = LocalMultiplayerClient.getSecondPlayerFramebuffer();
 
-        if (!ENABLE_PLAYER2_TEXTURE_COPY || playerTwo == null || p2Framebuffer == null) {
-            clearSecondWindow(p2Window, 0.05f, 0.12f, 0.35f); // blue = waiting / not ready
+        if (!ENABLE_PLAYER2_CPU_BLIT || playerTwo == null || p2Framebuffer == null) {
+            clearSecondWindow(p2Window, 0.05f, 0.12f, 0.35f);
             return;
         }
 
@@ -106,18 +110,91 @@ public abstract class GameRendererMixin {
                 p2Framebuffer.endWrite();
             }
 
+            readFramebufferToCpu(p2Framebuffer, targetWidth, targetHeight);
+
             LocalMultiplayerClient.isRenderingSecondView = false;
             client.getFramebuffer().beginWrite(true);
             RenderSystem.viewport(0, 0, window.getFramebufferWidth(), window.getFramebufferHeight());
 
-            drawFramebufferTextureToSecondWindow(p2Window, p2Framebuffer.getColorAttachment());
+            drawCpuPixelsToSecondWindow(p2Window, targetWidth, targetHeight);
         } catch (Throwable throwable) {
             LocalMultiplayerClient.isRenderingSecondView = false;
-            clearSecondWindow(p2Window, 0.45f, 0.05f, 0.05f); // red = copy/render threw
+            clearSecondWindow(p2Window, 0.45f, 0.05f, 0.05f);
         } finally {
             LocalMultiplayerClient.isRenderingSecondView = false;
             client.getFramebuffer().beginWrite(true);
             RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
+        }
+    }
+
+    private static void ensurePixelBuffer(int width, int height) {
+        int needed = width * height * 4;
+        if (p2PixelBuffer == null || p2PixelBuffer.capacity() < needed || p2PixelWidth != width || p2PixelHeight != height) {
+            p2PixelBuffer = BufferUtils.createByteBuffer(needed);
+            p2PixelWidth = width;
+            p2PixelHeight = height;
+        }
+    }
+
+    private void readFramebufferToCpu(Framebuffer framebuffer, int width, int height) {
+        ensurePixelBuffer(width, height);
+        p2PixelBuffer.clear();
+
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) framebuffer).getFbo());
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
+        GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2PixelBuffer);
+        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
+
+        p2PixelBuffer.flip();
+    }
+
+    private void drawCpuPixelsToSecondWindow(long p2Window, int width, int height) {
+        long mainWindow = client.getWindow().getHandle();
+        long previousContext = GLFW.glfwGetCurrentContext();
+        GLCapabilities previousCaps = GL.getCapabilities();
+
+        try {
+            GLFW.glfwMakeContextCurrent(p2Window);
+            GLCapabilities secondCaps = LocalMultiplayerClient.getSecondCapabilities();
+            if (secondCaps == null || p2PixelBuffer == null) {
+                return;
+            }
+            GL.setCapabilities(secondCaps);
+
+            int[] windowWidth = new int[1];
+            int[] windowHeight = new int[1];
+            GLFW.glfwGetFramebufferSize(p2Window, windowWidth, windowHeight);
+
+            GL11.glViewport(0, 0, Math.max(1, windowWidth[0]), Math.max(1, windowHeight[0]));
+            GL11.glDisable(GL11.GL_DEPTH_TEST);
+            GL11.glClearColor(0f, 0f, 0f, 1f);
+            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
+
+            GL11.glMatrixMode(GL11.GL_PROJECTION);
+            GL11.glPushMatrix();
+            GL11.glLoadIdentity();
+            GL11.glOrtho(0, width, 0, height, -1, 1);
+
+            GL11.glMatrixMode(GL11.GL_MODELVIEW);
+            GL11.glPushMatrix();
+            GL11.glLoadIdentity();
+
+            GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
+            GL11.glRasterPos2i(0, 0);
+            p2PixelBuffer.rewind();
+            GL11.glDrawPixels(width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2PixelBuffer);
+
+            GL11.glPopMatrix();
+            GL11.glMatrixMode(GL11.GL_PROJECTION);
+            GL11.glPopMatrix();
+            GL11.glMatrixMode(GL11.GL_MODELVIEW);
+
+            GLFW.glfwSwapBuffers(p2Window);
+        } finally {
+            GLFW.glfwMakeContextCurrent(previousContext == 0 ? mainWindow : previousContext);
+            GL.setCapabilities(previousCaps);
+            client.getFramebuffer().beginWrite(true);
         }
     }
 
@@ -148,92 +225,6 @@ public abstract class GameRendererMixin {
             GL.setCapabilities(previousCaps);
             client.getFramebuffer().beginWrite(true);
         }
-    }
-
-    private void drawFramebufferTextureToSecondWindow(long p2Window, int textureId) {
-        long mainWindow = client.getWindow().getHandle();
-        long previousContext = GLFW.glfwGetCurrentContext();
-        GLCapabilities previousCaps = GL.getCapabilities();
-
-        try {
-            GLFW.glfwMakeContextCurrent(p2Window);
-            GLCapabilities secondCaps = LocalMultiplayerClient.getSecondCapabilities();
-            if (secondCaps == null) {
-                return;
-            }
-            GL.setCapabilities(secondCaps);
-
-            int[] width = new int[1];
-            int[] height = new int[1];
-            GLFW.glfwGetFramebufferSize(p2Window, width, height);
-
-            GL11.glViewport(0, 0, Math.max(1, width[0]), Math.max(1, height[0]));
-            GL11.glDisable(GL11.GL_DEPTH_TEST);
-            GL11.glDisable(GL11.GL_CULL_FACE);
-            GL11.glClearColor(0f, 0f, 0f, 1f);
-            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-
-            if (p2BlitProgram == 0) {
-                p2BlitProgram = createP2BlitProgram();
-            }
-
-            GL20.glUseProgram(p2BlitProgram);
-            GL13.glActiveTexture(GL13.GL_TEXTURE0);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
-            GL20.glUniform1i(GL20.glGetUniformLocation(p2BlitProgram, "uTexture"), 0);
-
-            GL11.glBegin(GL11.GL_TRIANGLES);
-            GL11.glTexCoord2f(0f, 0f); GL11.glVertex2f(-1f, 1f);
-            GL11.glTexCoord2f(1f, 0f); GL11.glVertex2f(1f, 1f);
-            GL11.glTexCoord2f(1f, 1f); GL11.glVertex2f(1f, -1f);
-            GL11.glTexCoord2f(0f, 0f); GL11.glVertex2f(-1f, 1f);
-            GL11.glTexCoord2f(1f, 1f); GL11.glVertex2f(1f, -1f);
-            GL11.glTexCoord2f(0f, 1f); GL11.glVertex2f(-1f, -1f);
-            GL11.glEnd();
-
-            GL20.glUseProgram(0);
-            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
-
-            GLFW.glfwSwapBuffers(p2Window);
-        } finally {
-            GLFW.glfwMakeContextCurrent(previousContext == 0 ? mainWindow : previousContext);
-            GL.setCapabilities(previousCaps);
-            client.getFramebuffer().beginWrite(true);
-        }
-    }
-
-    private static int createP2BlitProgram() {
-        String vertexSource = "#version 120\n" +
-                "varying vec2 vTex;\n" +
-                "void main() {\n" +
-                "    gl_Position = gl_Vertex;\n" +
-                "    vTex = gl_MultiTexCoord0.xy;\n" +
-                "}\n";
-
-        String fragmentSource = "#version 120\n" +
-                "uniform sampler2D uTexture;\n" +
-                "varying vec2 vTex;\n" +
-                "void main() {\n" +
-                "    gl_FragColor = texture2D(uTexture, vTex);\n" +
-                "}\n";
-
-        int vertexShader = compileShader(GL20.GL_VERTEX_SHADER, vertexSource);
-        int fragmentShader = compileShader(GL20.GL_FRAGMENT_SHADER, fragmentSource);
-        int program = GL20.glCreateProgram();
-        GL20.glAttachShader(program, vertexShader);
-        GL20.glAttachShader(program, fragmentShader);
-        GL20.glLinkProgram(program);
-
-        GL20.glDeleteShader(vertexShader);
-        GL20.glDeleteShader(fragmentShader);
-        return program;
-    }
-
-    private static int compileShader(int type, String source) {
-        int shader = GL20.glCreateShader(type);
-        GL20.glShaderSource(shader, source);
-        GL20.glCompileShader(shader);
-        return shader;
     }
 
     @Redirect(
