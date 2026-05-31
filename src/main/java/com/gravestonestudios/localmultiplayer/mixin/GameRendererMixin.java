@@ -1,6 +1,7 @@
 package com.gravestonestudios.localmultiplayer.mixin;
 
 import com.gravestonestudios.localmultiplayer.LocalMultiplayerClient;
+import com.gravestonestudios.localmultiplayer.Player2AwtWindow;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
@@ -11,10 +12,8 @@ import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.glfw.GLFW;
-import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL30;
-import org.lwjgl.opengl.GLCapabilities;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -28,7 +27,6 @@ import java.util.UUID;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
-    private static final boolean ENABLE_PLAYER2_CPU_BLIT = true;
     private static ByteBuffer p2PixelBuffer;
     private static int p2PixelWidth = 0;
     private static int p2PixelHeight = 0;
@@ -50,19 +48,10 @@ public abstract class GameRendererMixin {
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) return;
 
-        long p2Window = LocalMultiplayerClient.getSecondWindowHandle();
-        if (p2Window == 0) {
-            LocalMultiplayerClient.initSecondWindow(client);
-            p2Window = LocalMultiplayerClient.getSecondWindowHandle();
-        }
-
-        if (p2Window == 0) return;
-
         Entity playerTwo = localmultiplayer$getPlayerTwoEntity();
         Framebuffer p2Framebuffer = LocalMultiplayerClient.getSecondPlayerFramebuffer();
 
-        if (!ENABLE_PLAYER2_CPU_BLIT || playerTwo == null || p2Framebuffer == null) {
-            clearSecondWindow(p2Window, 0.05f, 0.12f, 0.35f);
+        if (playerTwo == null || p2Framebuffer == null) {
             return;
         }
 
@@ -74,11 +63,8 @@ public abstract class GameRendererMixin {
         LocalMultiplayerClient.isRenderingSecondView = true;
 
         try {
-            int[] p2Width = new int[1];
-            int[] p2Height = new int[1];
-            GLFW.glfwGetFramebufferSize(p2Window, p2Width, p2Height);
-            int targetWidth = Math.max(1, p2Width[0]);
-            int targetHeight = Math.max(1, p2Height[0]);
+            int targetWidth = Math.min(854, Math.max(1, window.getFramebufferWidth()));
+            int targetHeight = Math.min(480, Math.max(1, window.getFramebufferHeight()));
 
             if (p2Framebuffer.textureWidth != targetWidth || p2Framebuffer.textureHeight != targetHeight) {
                 p2Framebuffer.resize(targetWidth, targetHeight, MinecraftClient.IS_SYSTEM_MAC);
@@ -97,8 +83,6 @@ public abstract class GameRendererMixin {
             try {
                 RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
                 renderWorld(tickDelta, startTime, new MatrixStack());
-
-                // Read while Player2 framebuffer is still bound. Reading after endWrite() reads the wrong target.
                 readBoundPlayerFramebufferToCpu(targetWidth, targetHeight);
             } finally {
                 renderHand = oldRenderHand;
@@ -107,14 +91,9 @@ public abstract class GameRendererMixin {
                 p2Framebuffer.endWrite();
             }
 
-            LocalMultiplayerClient.isRenderingSecondView = false;
-            client.getFramebuffer().beginWrite(true);
-            RenderSystem.viewport(0, 0, window.getFramebufferWidth(), window.getFramebufferHeight());
-
-            drawCpuPixelsToSecondWindow(p2Window, targetWidth, targetHeight);
-        } catch (Throwable throwable) {
-            LocalMultiplayerClient.isRenderingSecondView = false;
-            clearSecondWindow(p2Window, 0.45f, 0.05f, 0.05f);
+            Player2AwtWindow.update(p2PixelBuffer, targetWidth, targetHeight);
+        } catch (Throwable ignored) {
+            // Keep Minecraft alive even if the external viewer has a frame problem.
         } finally {
             LocalMultiplayerClient.isRenderingSecondView = false;
             client.getFramebuffer().beginWrite(true);
@@ -138,84 +117,6 @@ public abstract class GameRendererMixin {
         GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
         GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2PixelBuffer);
         p2PixelBuffer.flip();
-    }
-
-    private void drawCpuPixelsToSecondWindow(long p2Window, int width, int height) {
-        long mainWindow = client.getWindow().getHandle();
-        long previousContext = GLFW.glfwGetCurrentContext();
-        GLCapabilities previousCaps = GL.getCapabilities();
-
-        try {
-            GLFW.glfwMakeContextCurrent(p2Window);
-            GLCapabilities secondCaps = LocalMultiplayerClient.getSecondCapabilities();
-            if (secondCaps == null || p2PixelBuffer == null) {
-                return;
-            }
-            GL.setCapabilities(secondCaps);
-
-            int[] windowWidth = new int[1];
-            int[] windowHeight = new int[1];
-            GLFW.glfwGetFramebufferSize(p2Window, windowWidth, windowHeight);
-
-            GL11.glViewport(0, 0, Math.max(1, windowWidth[0]), Math.max(1, windowHeight[0]));
-            GL11.glDisable(GL11.GL_DEPTH_TEST);
-            GL11.glClearColor(0f, 0f, 0f, 1f);
-            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-
-            GL11.glMatrixMode(GL11.GL_PROJECTION);
-            GL11.glPushMatrix();
-            GL11.glLoadIdentity();
-            GL11.glOrtho(0, width, 0, height, -1, 1);
-
-            GL11.glMatrixMode(GL11.GL_MODELVIEW);
-            GL11.glPushMatrix();
-            GL11.glLoadIdentity();
-
-            GL11.glPixelStorei(GL11.GL_UNPACK_ALIGNMENT, 1);
-            GL11.glRasterPos2i(0, 0);
-            p2PixelBuffer.rewind();
-            GL11.glDrawPixels(width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2PixelBuffer);
-
-            GL11.glPopMatrix();
-            GL11.glMatrixMode(GL11.GL_PROJECTION);
-            GL11.glPopMatrix();
-            GL11.glMatrixMode(GL11.GL_MODELVIEW);
-
-            GLFW.glfwSwapBuffers(p2Window);
-        } finally {
-            GLFW.glfwMakeContextCurrent(previousContext == 0 ? mainWindow : previousContext);
-            GL.setCapabilities(previousCaps);
-            client.getFramebuffer().beginWrite(true);
-        }
-    }
-
-    private void clearSecondWindow(long p2Window, float red, float green, float blue) {
-        long mainWindow = client.getWindow().getHandle();
-        long previousContext = GLFW.glfwGetCurrentContext();
-        GLCapabilities previousCaps = GL.getCapabilities();
-
-        try {
-            GLFW.glfwMakeContextCurrent(p2Window);
-            GLCapabilities secondCaps = LocalMultiplayerClient.getSecondCapabilities();
-            if (secondCaps == null) {
-                return;
-            }
-            GL.setCapabilities(secondCaps);
-
-            int[] width = new int[1];
-            int[] height = new int[1];
-            GLFW.glfwGetFramebufferSize(p2Window, width, height);
-
-            GL11.glViewport(0, 0, Math.max(1, width[0]), Math.max(1, height[0]));
-            GL11.glDisable(GL11.GL_DEPTH_TEST);
-            GL11.glClearColor(red, green, blue, 1.0f);
-            GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-            GLFW.glfwSwapBuffers(p2Window);
-        } finally {
-            GLFW.glfwMakeContextCurrent(previousContext == 0 ? mainWindow : previousContext);
-            GL.setCapabilities(previousCaps);
-            client.getFramebuffer().beginWrite(true);
-        }
     }
 
     @Redirect(
