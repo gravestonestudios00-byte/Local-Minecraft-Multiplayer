@@ -4,11 +4,11 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.world.ClientWorld;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.decoration.ArmorStandEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.World;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWGamepadState;
 
@@ -44,7 +44,7 @@ public class LocalMultiplayerClient implements ClientModInitializer {
     }
 
     private static void ensurePlayerTwo(MinecraftClient client) {
-        World world = client.world;
+        ClientWorld world = client.world;
         ClientPlayerEntity p1 = client.player;
 
         if (playerTwo == null || playerTwo.isRemoved()) {
