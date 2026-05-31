@@ -28,12 +28,6 @@ import java.util.UUID;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
-    /**
-     * Stage 5:
-     * Avoid direct cross-context texture use. Render Player2 to the main-context framebuffer,
-     * read pixels back to CPU memory, then draw those pixels into the second window context.
-     * This is slower, but much safer for diagnosing/avoiding shared-texture native crashes.
-     */
     private static final boolean ENABLE_PLAYER2_CPU_BLIT = true;
     private static ByteBuffer p2PixelBuffer;
     private static int p2PixelWidth = 0;
@@ -97,8 +91,8 @@ public abstract class GameRendererMixin {
             boolean oldBlockOutline = blockOutlineEnabled;
 
             client.setCameraEntity(playerTwo);
-            renderHand = true;
-            blockOutlineEnabled = true;
+            renderHand = false;
+            blockOutlineEnabled = false;
 
             try {
                 RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
@@ -110,7 +104,7 @@ public abstract class GameRendererMixin {
                 p2Framebuffer.endWrite();
             }
 
-            readFramebufferToCpu(p2Framebuffer, targetWidth, targetHeight);
+            readCurrentFramebufferToCpu(targetWidth, targetHeight);
 
             LocalMultiplayerClient.isRenderingSecondView = false;
             client.getFramebuffer().beginWrite(true);
@@ -136,16 +130,12 @@ public abstract class GameRendererMixin {
         }
     }
 
-    private void readFramebufferToCpu(Framebuffer framebuffer, int width, int height) {
+    private void readCurrentFramebufferToCpu(int width, int height) {
         ensurePixelBuffer(width, height);
         p2PixelBuffer.clear();
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) framebuffer).getFbo());
-        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glReadBuffer(GL11.GL_BACK);
         GL11.glPixelStorei(GL11.GL_PACK_ALIGNMENT, 1);
         GL11.glReadPixels(0, 0, width, height, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, p2PixelBuffer);
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, 0);
-
         p2PixelBuffer.flip();
     }
 
