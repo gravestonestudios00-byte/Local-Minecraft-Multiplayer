@@ -1,18 +1,23 @@
 {
   "schemaVersion": 1,
   "id": "localmultiplayer",
-  "version": "0.1.0",
-  "name": "Simple Local Multiplayer",
-  "description": "Simple local multiplayer prototype: player 1 uses normal keyboard, player 2 is a controller-driven dummy entity.",
-  "authors": ["Xander"],
+  "version": "${version}",
+  "name": "Local Minecraft Multiplayer",
+  "description": "Simple fake local multiplayer prototype",
+  "authors": ["Gravestone Studios"],
   "environment": "client",
+  "accessWidener": "localmultiplayer.accesswidener",
+  "mixins": [
+    "localmultiplayer.mixins.json"
+  ],
   "entrypoints": {
-    "client": ["com.xander.localmultiplayer.LocalMultiplayerClient"]
+    "client": [
+      "com.gravestonestudios.localmultiplayer.LocalMultiplayerClient"
+    ]
   },
   "depends": {
-    "fabricloader": ">=0.16.0",
+    "fabricloader": ">=0.15.11",
     "minecraft": "1.20.1",
-    "fabric-api": "*",
-    "java": ">=17"
+    "fabric-api": "*"
   }
 }

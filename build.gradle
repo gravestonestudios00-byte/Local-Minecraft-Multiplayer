@@ -1,23 +1,35 @@
 plugins {
-    id 'fabric-loom' version '1.10-SNAPSHOT'
+    id 'fabric-loom' version '1.11-SNAPSHOT'
     id 'maven-publish'
 }
 
 version = '0.1.0'
-group = 'com.xander'
+group = 'com.gravestonestudios'
 
-base { archivesName = 'localmultiplayer' }
+repositories {
+    mavenCentral()
+    maven { url = "https://maven.fabricmc.net/" }
+}
 
-repositories { }
+loom {
+    accessWidenerPath = file('src/main/resources/localmultiplayer.accesswidener')
+}
 
 dependencies {
     minecraft 'com.mojang:minecraft:1.20.1'
     mappings 'net.fabricmc:yarn:1.20.1+build.10:v2'
-    modImplementation 'net.fabricmc:fabric-loader:0.16.10'
-    modImplementation 'net.fabricmc.fabric-api:fabric-api:0.92.3+1.20.1'
+    modImplementation 'net.fabricmc:fabric-loader:0.16.14'
+    modImplementation 'net.fabricmc.fabric-api:fabric-api:0.92.2+1.20.1'
 }
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(17)
-    withSourcesJar()
+}
+
+processResources {
+    inputs.property 'version', version
+
+    filesMatching('fabric.mod.json') {
+        expand 'version': version
+    }
 }
