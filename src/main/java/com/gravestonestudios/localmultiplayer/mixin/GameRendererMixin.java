@@ -36,7 +36,6 @@ public abstract class GameRendererMixin {
     private static final boolean ENABLE_PLAYER2_RENDER = true;
 
     private static Framebuffer p2Framebuffer;
-    private static Framebuffer mainBackupFramebuffer;
     private static ByteBuffer p2Pixels;
     private static int p2PixelWidth;
     private static int p2PixelHeight;
@@ -61,24 +60,9 @@ public abstract class GameRendererMixin {
     @Shadow
     public abstract void renderWorld(float tickDelta, long limitTime, MatrixStack matrices);
 
-    @Shadow
-    public abstract void render(float tickDelta, long startTime, boolean tick);
-
-    @Inject(method = "render", at = @At("TAIL"))
+    @Inject(method = "render", at = @At("HEAD"))
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) {
-            return;
-        }
-
-        // Full Player2 capture calls GameRenderer.render() recursively.
-        // Do absolutely nothing inside the recursive injected tail.
-        if (LocalMultiplayerClient.isRenderingSecondView) {
-            return;
-        }
-
-        // Do not capture menus, pause screen, inventory, chat, etc. Full render includes GUI layers,
-        // so capturing while a screen is open turns the Player2 window into the same dark menu overlay.
-        if (client.currentScreen != null) {
             return;
         }
 
@@ -98,7 +82,7 @@ public abstract class GameRendererMixin {
         }
 
         Entity playerTwo = findPlayerTwoEntity();
-        if (playerTwo == null) {
+        if (playerTwo == null || LocalMultiplayerClient.isRenderingSecondView) {
             clearSecondWindowBlue(p2Window);
             return;
         }
@@ -108,33 +92,21 @@ public abstract class GameRendererMixin {
         GLFW.glfwGetFramebufferSize(p2Window, p2WindowWidth, p2WindowHeight);
         int targetWidth = Math.max(1, Math.min(854, p2WindowWidth[0]));
         int targetHeight = Math.max(1, Math.min(480, p2WindowHeight[0]));
-        int mainWidth = Math.max(1, client.getWindow().getFramebufferWidth());
-        int mainHeight = Math.max(1, client.getWindow().getFramebufferHeight());
-
-        try {
-            ensureMainBackupFramebuffer(mainWidth, mainHeight);
-            copyFramebuffer(client.getFramebuffer(), mainBackupFramebuffer, mainWidth, mainHeight);
-        } catch (Throwable ignored) {
-            clearSecondWindowRed(p2Window);
-            return;
-        }
 
         LocalMultiplayerClient.isRenderingSecondView = true;
         try {
-            ensurePlayer2Framebuffer(targetWidth, targetHeight);
-            renderPlayerTwoToCpuBuffer(playerTwo, targetWidth, targetHeight, tickDelta, startTime, tick);
+            ensureMainContextFramebuffer(targetWidth, targetHeight);
+            renderPlayerTwoToCpuBuffer(playerTwo, targetWidth, targetHeight, tickDelta, startTime);
         } catch (Throwable ignored) {
+            LocalMultiplayerClient.isRenderingSecondView = false;
+            client.getFramebuffer().beginWrite(true);
+            RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
             clearSecondWindowRed(p2Window);
             return;
         } finally {
             LocalMultiplayerClient.isRenderingSecondView = false;
-            try {
-                copyFramebuffer(mainBackupFramebuffer, client.getFramebuffer(), mainWidth, mainHeight);
-            } catch (Throwable ignored) {
-                // If restore fails, keep the game alive and at least rebind the main target.
-            }
             client.getFramebuffer().beginWrite(true);
-            RenderSystem.viewport(0, 0, mainWidth, mainHeight);
+            RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
         }
 
         try {
@@ -142,17 +114,19 @@ public abstract class GameRendererMixin {
         } catch (Throwable ignored) {
             clearSecondWindowRed(p2Window);
         } finally {
+            // Very important: vanilla Player1 rendering runs after this HEAD injection.
+            // Restore main context/framebuffer so the real render fully overwrites any leaked P2 pixels.
             GLFW.glfwMakeContextCurrent(client.getWindow().getHandle());
             GLCapabilities mainCaps = LocalMultiplayerClient.getMainCapabilities();
             if (mainCaps != null) {
                 GL.setCapabilities(mainCaps);
             }
             client.getFramebuffer().beginWrite(true);
-            RenderSystem.viewport(0, 0, mainWidth, mainHeight);
+            RenderSystem.viewport(0, 0, client.getWindow().getFramebufferWidth(), client.getWindow().getFramebufferHeight());
         }
     }
 
-    private void ensurePlayer2Framebuffer(int width, int height) {
+    private void ensureMainContextFramebuffer(int width, int height) {
         if (p2Framebuffer == null) {
             p2Framebuffer = new SimpleFramebuffer(width, height, true, MinecraftClient.IS_SYSTEM_MAC);
             p2Framebuffer.setClearColor(0f, 0f, 0f, 1f);
@@ -164,35 +138,6 @@ public abstract class GameRendererMixin {
         }
     }
 
-    private void ensureMainBackupFramebuffer(int width, int height) {
-        if (mainBackupFramebuffer == null) {
-            mainBackupFramebuffer = new SimpleFramebuffer(width, height, true, MinecraftClient.IS_SYSTEM_MAC);
-            mainBackupFramebuffer.setClearColor(0f, 0f, 0f, 1f);
-            return;
-        }
-
-        if (mainBackupFramebuffer.textureWidth != width || mainBackupFramebuffer.textureHeight != height) {
-            mainBackupFramebuffer.resize(width, height, MinecraftClient.IS_SYSTEM_MAC);
-        }
-    }
-
-    private void copyFramebuffer(Framebuffer source, Framebuffer target, int width, int height) {
-        int oldRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
-        int oldDraw = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) source).getFbo());
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, ((FramebufferAccessor) target).getFbo());
-        GL30.glBlitFramebuffer(
-                0, 0, width, height,
-                0, 0, width, height,
-                GL11.GL_COLOR_BUFFER_BIT,
-                GL11.GL_NEAREST
-        );
-
-        GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, oldRead);
-        GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, oldDraw);
-    }
-
     private void ensureCpuBuffer(int width, int height) {
         int bytes = width * height * 4;
         if (p2Pixels == null || p2Pixels.capacity() < bytes || p2PixelWidth != width || p2PixelHeight != height) {
@@ -202,7 +147,7 @@ public abstract class GameRendererMixin {
         }
     }
 
-    private void renderPlayerTwoToCpuBuffer(Entity playerTwo, int width, int height, float tickDelta, long startTime, boolean tick) {
+    private void renderPlayerTwoToCpuBuffer(Entity playerTwo, int width, int height, float tickDelta, long startTime) {
         ensureCpuBuffer(width, height);
 
         p2Framebuffer.beginWrite(true);
@@ -218,10 +163,7 @@ public abstract class GameRendererMixin {
         try {
             RenderSystem.viewport(0, 0, width, height);
             RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
-
-            // Use the full GameRenderer path instead of renderWorld only.
-            // This includes world passes that renderWorld-only capture missed, but menus are skipped above.
-            render(tickDelta, startTime, false);
+            renderWorld(tickDelta, startTime, new MatrixStack());
 
             p2Pixels.clear();
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) p2Framebuffer).getFbo());
