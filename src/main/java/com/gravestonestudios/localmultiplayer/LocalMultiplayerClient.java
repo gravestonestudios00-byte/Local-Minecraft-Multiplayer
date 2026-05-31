@@ -6,35 +6,41 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.network.OtherClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
+import net.minecraft.entity.MovementType;
+import net.minecraft.network.ClientConnection;
+import net.minecraft.network.NetworkSide;
+import net.minecraft.network.PacketCallbacks;
+import net.minecraft.network.packet.Packet;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWGamepadState;
 
+import java.net.SocketAddress;
 import java.util.UUID;
 
 public class LocalMultiplayerClient implements ClientModInitializer {
 
-    private static final int FAKE_PLAYER_ID = 24002002;
-    private static final UUID FAKE_PLAYER_UUID = UUID.nameUUIDFromBytes("LocalMultiplayerPlayerTwo".getBytes());
-    private static final String FAKE_PLAYER_NAME = "Player2";
+    private static final String PLAYER_TWO_NAME = "Player2";
+    private static final UUID PLAYER_TWO_UUID = UUID.nameUUIDFromBytes("LocalMultiplayerPlayerTwo".getBytes());
 
-    private static final double WALK_SPEED = 0.18;
-    private static final double GRAVITY = 0.08;
+    private static final double WALK_SPEED_PER_TICK = 0.18;
     private static final double JUMP_VELOCITY = 0.42;
-    private static final double TERMINAL_VELOCITY = -3.0;
-    private static final float LOOK_SPEED = 4.0f;
+    private static final float LOOK_SPEED_DEGREES = 4.0f;
 
-    private static OtherClientPlayerEntity playerTwo;
-    private static ClientWorld currentWorld;
+    private static MinecraftServer activeServer;
+    private static ServerPlayerEntity playerTwo;
+    private static FakeClientConnection playerTwoConnection;
+    private static boolean spawnAttempted = false;
+
     private static int activeGamepad = -1;
     private static boolean announcedController = false;
     private static boolean announcedSpawn = false;
-    private static double velocityY = 0.0;
-    private static boolean onGround = true;
+
     private static float yaw = 0.0f;
     private static float pitch = 0.0f;
     private static float lastLeftX = 0.0f;
@@ -45,63 +51,84 @@ public class LocalMultiplayerClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            if (client.player == null || client.world == null) {
-                resetState();
+            MinecraftServer server = client.getServer();
+
+            if (client.player == null || client.world == null || server == null) {
+                resetLocalState();
                 return;
             }
 
-            if (currentWorld != client.world) {
-                resetState();
-                currentWorld = client.world;
+            if (activeServer != server) {
+                removePlayerTwo(activeServer);
+                resetLocalState();
+                activeServer = server;
             }
 
-            ensurePlayerTwoExists(client);
-            updateController(client);
+            ensureServerPlayerTwo(client, server);
+            readControllerAndMovePlayerTwo(client, server);
         });
 
         HudRenderCallback.EVENT.register((context, tickDelta) -> renderDebug(MinecraftClient.getInstance(), context));
     }
 
-    private void ensurePlayerTwoExists(MinecraftClient client) {
-        if (client.world == null || client.player == null) {
+    private void ensureServerPlayerTwo(MinecraftClient client, MinecraftServer server) {
+        if (spawnAttempted) {
+            playerTwo = server.getPlayerManager().getPlayer(PLAYER_TWO_UUID);
             return;
         }
 
-        if (playerTwo != null && !playerTwo.isRemoved() && client.world.getEntityById(FAKE_PLAYER_ID) == playerTwo) {
+        spawnAttempted = true;
+
+        ServerWorld serverWorld = server.getWorld(client.world.getRegistryKey());
+        if (serverWorld == null || client.player == null) {
             return;
         }
-
-        GameProfile profile = new GameProfile(FAKE_PLAYER_UUID, FAKE_PLAYER_NAME);
-        playerTwo = new OtherClientPlayerEntity(client.world, profile);
-        playerTwo.setId(FAKE_PLAYER_ID);
 
         Vec3d forward = client.player.getRotationVec(1.0f).multiply(3.0);
-        Vec3d spawn = client.player.getPos().add(forward.x, 0.0, forward.z);
+        Vec3d spawnPos = client.player.getPos().add(forward.x, 0.0, forward.z);
 
         yaw = client.player.getYaw();
         pitch = 0.0f;
-        velocityY = 0.0;
-        onGround = true;
 
-        playerTwo.refreshPositionAndAngles(spawn.x, client.player.getY(), spawn.z, yaw, pitch);
-        playerTwo.setHealth(20.0f);
-        playerTwo.setOnGround(true);
-        playerTwo.setCustomName(Text.literal(FAKE_PLAYER_NAME));
-        playerTwo.setCustomNameVisible(true);
-        playerTwo.setGlowing(true);
+        server.execute(() -> {
+            ServerPlayerEntity existing = server.getPlayerManager().getPlayer(PLAYER_TWO_UUID);
+            if (existing != null) {
+                playerTwo = existing;
+                return;
+            }
 
-        client.world.addEntity(FAKE_PLAYER_ID, playerTwo);
+            GameProfile profile = new GameProfile(PLAYER_TWO_UUID, PLAYER_TWO_NAME);
+            ServerPlayerEntity fake = new ServerPlayerEntity(server, serverWorld, profile);
+            fake.refreshPositionAndAngles(spawnPos.x, spawnPos.y, spawnPos.z, yaw, pitch);
+            fake.setHealth(20.0f);
+
+            FakeClientConnection connection = new FakeClientConnection();
+            playerTwoConnection = connection;
+
+            server.getPlayerManager().onPlayerConnect(connection, fake);
+            fake.refreshPositionAndAngles(spawnPos.x, spawnPos.y, spawnPos.z, yaw, pitch);
+            fake.setYaw(yaw);
+            fake.setPitch(pitch);
+            fake.setHeadYaw(yaw);
+            fake.setBodyYaw(yaw);
+
+            playerTwo = fake;
+        });
 
         if (!announcedSpawn) {
-            client.player.sendMessage(Text.literal("Local Multiplayer: fake Player2 spawned. No real login/client used."), false);
+            client.player.sendMessage(Text.literal("Local Multiplayer: server-spawned Player2 requested."), false);
             announcedSpawn = true;
         }
     }
 
-    private void updateController(MinecraftClient client) {
-        if (playerTwo == null || client.world == null) {
+    private void readControllerAndMovePlayerTwo(MinecraftClient client, MinecraftServer server) {
+        ServerPlayerEntity serverPlayer = server.getPlayerManager().getPlayer(PLAYER_TWO_UUID);
+        if (serverPlayer == null) {
+            playerTwo = null;
             return;
         }
+
+        playerTwo = serverPlayer;
 
         int gamepad = getActiveGamepad();
         if (gamepad == -1) {
@@ -125,14 +152,28 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         lastLeftY = applyDeadzone(state.axes(GLFW.GLFW_GAMEPAD_AXIS_LEFT_Y));
         lastRightX = applyDeadzone(state.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_X));
         lastRightY = applyDeadzone(state.axes(GLFW.GLFW_GAMEPAD_AXIS_RIGHT_Y));
-
         boolean jumpPressed = state.buttons(GLFW.GLFW_GAMEPAD_BUTTON_A) == GLFW.GLFW_PRESS;
 
-        yaw = MathHelper.wrapDegrees(yaw + lastRightX * LOOK_SPEED);
-        pitch = MathHelper.clamp(pitch + lastRightY * LOOK_SPEED, -80.0f, 80.0f);
+        float inputLeftX = lastLeftX;
+        float inputLeftY = lastLeftY;
+        float inputRightX = lastRightX;
+        float inputRightY = lastRightY;
 
-        float forwardInput = -lastLeftY;
-        float strafeInput = lastLeftX;
+        server.execute(() -> movePlayerTwoOnServer(server, inputLeftX, inputLeftY, inputRightX, inputRightY, jumpPressed));
+    }
+
+    private void movePlayerTwoOnServer(MinecraftServer server, float leftX, float leftY, float rightXInput, float rightYInput, boolean jumpPressed) {
+        ServerPlayerEntity player = server.getPlayerManager().getPlayer(PLAYER_TWO_UUID);
+        if (player == null) {
+            playerTwo = null;
+            return;
+        }
+
+        yaw = MathHelper.wrapDegrees(yaw + rightXInput * LOOK_SPEED_DEGREES);
+        pitch = MathHelper.clamp(pitch + rightYInput * LOOK_SPEED_DEGREES, -80.0f, 80.0f);
+
+        float forwardInput = -leftY;
+        float strafeInput = leftX;
         float yawRadians = yaw * ((float) Math.PI / 180.0f);
 
         double forwardX = -MathHelper.sin(yawRadians);
@@ -141,58 +182,28 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         double rightZ = MathHelper.sin(yawRadians);
 
         Vec3d horizontal = new Vec3d(
-                (forwardX * forwardInput + rightX * strafeInput) * WALK_SPEED,
+                (forwardX * forwardInput + rightX * strafeInput) * WALK_SPEED_PER_TICK,
                 0.0,
-                (forwardZ * forwardInput + rightZ * strafeInput) * WALK_SPEED
+                (forwardZ * forwardInput + rightZ * strafeInput) * WALK_SPEED_PER_TICK
         );
 
-        if (horizontal.horizontalLengthSquared() > WALK_SPEED * WALK_SPEED) {
-            horizontal = horizontal.normalize().multiply(WALK_SPEED);
+        if (horizontal.horizontalLengthSquared() > WALK_SPEED_PER_TICK * WALK_SPEED_PER_TICK) {
+            horizontal = horizontal.normalize().multiply(WALK_SPEED_PER_TICK);
         }
 
-        if (jumpPressed && onGround) {
-            velocityY = JUMP_VELOCITY;
-            onGround = false;
+        player.setYaw(yaw);
+        player.setPitch(pitch);
+        player.setHeadYaw(yaw);
+        player.setBodyYaw(yaw);
+
+        if (jumpPressed && player.isOnGround()) {
+            Vec3d velocity = player.getVelocity();
+            player.setVelocity(velocity.x, JUMP_VELOCITY, velocity.z);
         }
 
-        if (!onGround) {
-            velocityY = Math.max(TERMINAL_VELOCITY, velocityY - GRAVITY);
+        if (horizontal.lengthSquared() > 0.0) {
+            player.move(MovementType.PLAYER, horizontal);
         }
-
-        Vec3d oldPos = playerTwo.getPos();
-        Vec3d newPos = oldPos.add(horizontal.x, velocityY, horizontal.z);
-
-        double groundY = client.world.getBottomY();
-        if (newPos.y <= groundY) {
-            newPos = new Vec3d(newPos.x, groundY, newPos.z);
-            velocityY = 0.0;
-            onGround = true;
-        }
-
-        // Cheap ground clamp for the prototype: do not fall below the block directly under Player2.
-        int blockX = MathHelper.floor(newPos.x);
-        int blockZ = MathHelper.floor(newPos.z);
-        int scanY = MathHelper.floor(newPos.y);
-        for (int y = scanY; y >= client.world.getBottomY(); y--) {
-            if (!client.world.getBlockState(new net.minecraft.util.math.BlockPos(blockX, y, blockZ)).isAir()) {
-                double feetY = y + 1.0;
-                if (newPos.y <= feetY) {
-                    newPos = new Vec3d(newPos.x, feetY, newPos.z);
-                    velocityY = 0.0;
-                    onGround = true;
-                }
-                break;
-            }
-        }
-
-        playerTwo.setPosition(newPos);
-        playerTwo.setYaw(yaw);
-        playerTwo.setPitch(pitch);
-        playerTwo.prevYaw = yaw;
-        playerTwo.bodyYaw = yaw;
-        playerTwo.headYaw = yaw;
-        playerTwo.setOnGround(onGround);
-        playerTwo.updateLimbs(false);
     }
 
     private int getActiveGamepad() {
@@ -225,8 +236,8 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         int color = 0xFFFFFF;
 
         context.drawText(client.textRenderer, Text.literal("Local Multiplayer"), x, y, color, true);
-        context.drawText(client.textRenderer, Text.literal("Mode: fake client-side entity"), x, y + 10, color, true);
-        context.drawText(client.textRenderer, Text.literal("Player2: " + (playerTwo == null ? "missing" : "spawned")), x, y + 20, color, true);
+        context.drawText(client.textRenderer, Text.literal("Mode: server-spawned fake player"), x, y + 10, color, true);
+        context.drawText(client.textRenderer, Text.literal("Player2: " + (playerTwo == null ? "missing" : "server entity")), x, y + 20, color, true);
         context.drawText(client.textRenderer, Text.literal("Controller: " + (getActiveGamepad() == -1 ? "missing" : "ready")), x, y + 30, color, true);
         context.drawText(client.textRenderer, Text.literal(String.format("LX %.2f LY %.2f RX %.2f RY %.2f", lastLeftX, lastLeftY, lastRightX, lastRightY)), x, y + 40, color, true);
 
@@ -236,23 +247,80 @@ public class LocalMultiplayerClient implements ClientModInitializer {
         }
     }
 
-    private void resetState() {
-        if (currentWorld != null && playerTwo != null) {
-            currentWorld.removeEntity(FAKE_PLAYER_ID, net.minecraft.entity.Entity.RemovalReason.DISCARDED);
+    private void removePlayerTwo(MinecraftServer server) {
+        if (server == null) {
+            return;
         }
 
+        server.execute(() -> {
+            ServerPlayerEntity existing = server.getPlayerManager().getPlayer(PLAYER_TWO_UUID);
+            if (existing != null) {
+                server.getPlayerManager().remove(existing);
+            }
+        });
+    }
+
+    private void resetLocalState() {
+        activeServer = null;
         playerTwo = null;
-        currentWorld = null;
+        playerTwoConnection = null;
+        spawnAttempted = false;
         activeGamepad = -1;
         announcedController = false;
         announcedSpawn = false;
-        velocityY = 0.0;
-        onGround = true;
         yaw = 0.0f;
         pitch = 0.0f;
         lastLeftX = 0.0f;
         lastLeftY = 0.0f;
         lastRightX = 0.0f;
         lastRightY = 0.0f;
+    }
+
+    private static final class FakeClientConnection extends ClientConnection {
+        private static final SocketAddress LOCAL_FAKE_ADDRESS = new SocketAddress() { };
+        private boolean open = true;
+
+        private FakeClientConnection() {
+            super(NetworkSide.SERVERBOUND);
+        }
+
+        @Override
+        public void send(Packet<?> packet) {
+            // Server-spawned fake player has no real remote client to receive packets.
+        }
+
+        @Override
+        public void send(Packet<?> packet, PacketCallbacks callbacks) {
+            // Server-spawned fake player has no real remote client to receive packets.
+        }
+
+        @Override
+        public void disconnect(Text disconnectReason) {
+            open = false;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return open;
+        }
+
+        @Override
+        public boolean isLocal() {
+            return true;
+        }
+
+        @Override
+        public SocketAddress getAddress() {
+            return LOCAL_FAKE_ADDRESS;
+        }
+
+        @Override
+        public void disableAutoRead() {
+        }
+
+        @Override
+        public void handleDisconnection() {
+            open = false;
+        }
     }
 }
