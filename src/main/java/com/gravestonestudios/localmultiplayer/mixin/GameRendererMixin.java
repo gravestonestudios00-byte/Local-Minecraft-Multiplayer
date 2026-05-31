@@ -61,9 +61,18 @@ public abstract class GameRendererMixin {
     @Shadow
     public abstract void renderWorld(float tickDelta, long limitTime, MatrixStack matrices);
 
+    @Shadow
+    public abstract void render(float tickDelta, long startTime, boolean tick);
+
     @Inject(method = "render", at = @At("TAIL"))
     private void localmultiplayer$renderSecondPlayerView(float tickDelta, long startTime, boolean tick, CallbackInfo ci) {
         if (client.world == null || client.player == null) {
+            return;
+        }
+
+        // Full Player2 capture calls GameRenderer.render() recursively.
+        // Do absolutely nothing inside the recursive injected tail.
+        if (LocalMultiplayerClient.isRenderingSecondView) {
             return;
         }
 
@@ -83,7 +92,7 @@ public abstract class GameRendererMixin {
         }
 
         Entity playerTwo = findPlayerTwoEntity();
-        if (playerTwo == null || LocalMultiplayerClient.isRenderingSecondView) {
+        if (playerTwo == null) {
             clearSecondWindowBlue(p2Window);
             return;
         }
@@ -107,7 +116,7 @@ public abstract class GameRendererMixin {
         LocalMultiplayerClient.isRenderingSecondView = true;
         try {
             ensurePlayer2Framebuffer(targetWidth, targetHeight);
-            renderPlayerTwoToCpuBuffer(playerTwo, targetWidth, targetHeight, tickDelta, startTime);
+            renderPlayerTwoToCpuBuffer(playerTwo, targetWidth, targetHeight, tickDelta, startTime, tick);
         } catch (Throwable ignored) {
             clearSecondWindowRed(p2Window);
             return;
@@ -187,7 +196,7 @@ public abstract class GameRendererMixin {
         }
     }
 
-    private void renderPlayerTwoToCpuBuffer(Entity playerTwo, int width, int height, float tickDelta, long startTime) {
+    private void renderPlayerTwoToCpuBuffer(Entity playerTwo, int width, int height, float tickDelta, long startTime, boolean tick) {
         ensureCpuBuffer(width, height);
 
         p2Framebuffer.beginWrite(true);
@@ -203,7 +212,10 @@ public abstract class GameRendererMixin {
         try {
             RenderSystem.viewport(0, 0, width, height);
             RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, MinecraftClient.IS_SYSTEM_MAC);
-            renderWorld(tickDelta, startTime, new MatrixStack());
+
+            // Use the full GameRenderer path instead of renderWorld only.
+            // This should include passes that renderWorld-only capture missed.
+            render(tickDelta, startTime, false);
 
             p2Pixels.clear();
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, ((FramebufferAccessor) p2Framebuffer).getFbo());
